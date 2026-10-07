@@ -77,12 +77,31 @@ kind!(/** `-10 * log10(p)`, rounded. */ Phred, "phred", u8, 0, u8::MAX, linear: 
 kind!(/** `-1000 * log10(p)`, rounded; `u16::MAX` is reserved as tag. */
       HpPhred, "hpPhred", u16, 0, u16::MAX - 1, linear: false, phreded: true);
 
-/// Kinds that support `+=` (every kind except [`Linear`]).
-pub trait NonLinear: ProbabilityKind {}
-impl NonLinear for Log {}
-impl NonLinear for Log10 {}
-impl NonLinear for Phred {}
-impl NonLinear for HpPhred {}
+/// Kinds that support `+` / `+=`, i.e. multiplying the probabilities (every kind except [`Linear`]).
+pub trait NonLinear: ProbabilityKind {
+    /// The sum of two values; Phred and HpPhred saturate at [`ProbabilityKind::MAX`].
+    fn add_values(a: Self::Value, b: Self::Value) -> Self::Value;
+}
+impl NonLinear for Log {
+    fn add_values(a: f64, b: f64) -> f64 {
+        a + b
+    }
+}
+impl NonLinear for Log10 {
+    fn add_values(a: f64, b: f64) -> f64 {
+        a + b
+    }
+}
+impl NonLinear for Phred {
+    fn add_values(a: u8, b: u8) -> u8 {
+        a.saturating_add(b)
+    }
+}
+impl NonLinear for HpPhred {
+    fn add_values(a: u16, b: u16) -> u16 {
+        a.saturating_add(b).min(Self::MAX)
+    }
+}
 
 /// Kinds that can hold a sentinel "tag" value (`isTaggable()`: all but [`Phred`]).
 pub trait Taggable: ProbabilityKind {
@@ -375,28 +394,29 @@ impl<K: ProbabilityKind> Probability<K> {
     {
         ps.into_iter().map(|p| p.convert::<Linear>().get()).sum()
     }
+}
 
+impl Probability<Linear> {
+    /// Arithmetic mean of the probabilities; `None` if `ps` is empty.
+    pub fn average<I: IntoIterator<Item = Self>>(ps: I) -> Option<Self> {
+        let mut n = 0_usize;
+        let total = Self::sum(ps.into_iter().inspect(|_| n += 1));
+        (n > 0).then(|| Self::new_unchecked(total / n as f64))
+    }
+}
+
+impl<K: NonLinear> Probability<K> {
     /// Arithmetic mean of the probabilities, in this representation; `None` if `ps` is empty.
     ///
-    /// Non-linear representations are averaged in log space (log-sum-exp), so
-    /// log probabilities far below `f64` underflow keep their precision.
+    /// Averaged in log space (log-sum-exp), so log probabilities far below
+    /// `f64` underflow keep their precision.
     pub fn average<I: IntoIterator<Item = Self>>(ps: I) -> Option<Self>
     where
-        Linear: ConvertFrom<K>,
         Log: ConvertFrom<K>,
-        K: ConvertFrom<Linear> + ConvertFrom<Log>,
+        K: ConvertFrom<Log>,
     {
-        let mut n = 0_usize;
-        if K::IS_LINEAR {
-            let total: f64 = ps
-                .into_iter()
-                .inspect(|_| n += 1)
-                .map(|p| p.convert::<Linear>().get())
-                .sum();
-            return (n > 0)
-                .then(|| Probability::<Linear>::new_unchecked(total / n as f64).convert());
-        }
         // Streaming log-sum-exp: total = exp(max) * scaled.
+        let mut n = 0_usize;
         let mut max = f64::NEG_INFINITY;
         let mut scaled = 0.0;
         for x in ps.into_iter().map(|p| p.convert::<Log>().get()) {
@@ -418,7 +438,7 @@ impl<K: ProbabilityKind> Probability<K> {
 
 impl<K: NonLinear> AddAssign for Probability<K> {
     fn add_assign(&mut self, rhs: Self) {
-        self.value += rhs.value;
+        self.value = K::add_values(self.value, rhs.value);
     }
 }
 
@@ -456,7 +476,7 @@ impl Add for Probability<Linear> {
 impl<K: NonLinear> Add for Probability<K> {
     type Output = Self;
     fn add(self, rhs: Self) -> Self {
-        Self::new_unchecked(self.value + rhs.value)
+        Self::new_unchecked(K::add_values(self.value, rhs.value))
     }
 }
 
@@ -538,10 +558,10 @@ impl<K: ProbabilityKind> FromStr for Probability<K> {
 mod tests {
     use super::*;
 
-    /// Relative tolerance of the port (ADR-0001), absolute near zero.
+    /// Relative tolerance of the port (issue #1: ~1e-9); exact when `expected` is 0.
     #[track_caller]
     fn assert_close(actual: f64, expected: f64) {
-        let tol = 1e-9 * expected.abs().max(1.0);
+        let tol = 1e-9 * expected.abs();
         assert!(
             (actual - expected).abs() <= tol,
             "{actual} is not within {tol} of {expected}"
@@ -686,6 +706,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::approx_constant,
+        reason = "reference values are independent literals, not the constants the code uses"
+    )]
     fn conversions() {
         // Probability 0: the C++ compared `ln(0)` with `lowest()` only after a
         // lossy cast to float; the actual value is -inf in both languages.
@@ -695,42 +719,49 @@ mod tests {
         assert_eq!(PhredProbability::from(zero), PhredProbability::lowest());
         assert_eq!(HpPhredProbability::from(zero), HpPhredProbability::lowest());
 
-        for (p, ph, hp) in [(0.2, 7, 699), (0.3, 5, 523)] {
+        // Reference values: 40-digit decimal arithmetic, rounded to f64.
+        for (p, ln, log10, ph, hp) in [
+            (0.2, -1.6094379124341003, -0.6989700043360189, 7, 699),
+            (0.3, -1.203972804325936, -0.5228787452803375, 5, 523),
+        ] {
             let p = lin(p);
-            assert_close(LogProbability::from(p).get(), p.get().ln());
-            assert_close(Log10Probability::from(p).get(), p.get().log10());
+            assert_close(LogProbability::from(p).get(), ln);
+            assert_close(Log10Probability::from(p).get(), log10);
             assert_eq!(PhredProbability::from(p), ph);
             assert_eq!(HpPhredProbability::from(p), hp);
         }
 
-        for (lp, ph, hp) in [(-1.0, 4, 434), (-2.0, 9, 869)] {
+        for (lp, linear, log10, ph, hp) in [
+            (-1.0, 0.36787944117144233, -0.4342944819032518, 4, 434),
+            (-2.0, 0.1353352832366127, -0.8685889638065036, 9, 869),
+        ] {
             let lp = log(lp);
-            assert_close(LinearProbability::from(lp).get(), lp.get().exp());
-            assert_close(Log10Probability::from(lp).get(), lp.get().exp().log10());
+            assert_close(LinearProbability::from(lp).get(), linear);
+            assert_close(Log10Probability::from(lp).get(), log10);
             assert_eq!(PhredProbability::from(lp), ph);
             assert_eq!(HpPhredProbability::from(lp), hp);
         }
 
-        for (l10p, ph, hp) in [(-3.0, 30, 3000), (-4.123, 41, 4123)] {
+        for (l10p, linear, ln, ph, hp) in [
+            (-3.0, 0.001, -6.907755278982137, 30, 3000),
+            (-4.123, 7.533555637337174e-5, -9.49355833841445, 41, 4123),
+        ] {
             let l10p = log10(l10p);
-            assert_close(LinearProbability::from(l10p).get(), 10f64.powf(l10p.get()));
-            assert_close(
-                LogProbability::from(l10p).get(),
-                10f64.powf(l10p.get()).ln(),
-            );
+            assert_close(LinearProbability::from(l10p).get(), linear);
+            assert_close(LogProbability::from(l10p).get(), ln);
             assert_eq!(PhredProbability::from(l10p), ph);
             assert_eq!(HpPhredProbability::from(l10p), hp);
         }
 
         let ph = phred(11);
-        assert_close(LinearProbability::from(ph).get(), 10f64.powf(-1.1));
-        assert_close(LogProbability::from(ph).get(), 10f64.powf(-1.1).ln());
+        assert_close(LinearProbability::from(ph).get(), 0.07943282347242815);
+        assert_close(LogProbability::from(ph).get(), -2.5328436022934504);
         assert_close(Log10Probability::from(ph).get(), -1.1);
         assert_eq!(HpPhredProbability::from(ph), 1100);
 
         let hp = hp_phred(12345);
-        assert_close(LinearProbability::from(hp).get(), 10f64.powf(-12.345));
-        assert_close(LogProbability::from(hp).get(), 10f64.powf(-12.345).ln());
+        assert_close(LinearProbability::from(hp).get(), 4.5185594437492237e-13);
+        assert_close(LogProbability::from(hp).get(), -28.425412973011493);
         assert_close(Log10Probability::from(hp).get(), -12.345);
         assert_eq!(PhredProbability::from(hp), 123);
     }
@@ -876,7 +907,17 @@ mod tests {
         let err = "abc".parse::<PhredProbability>().unwrap_err();
         assert!(matches!(err, ProbabilityError::Parse { .. }));
         assert!(err.source().is_some());
-        assert_eq!(lin(0.25).to_string(), "0.25");
+        for s in ["0.25", "1e-300", "0"] {
+            assert_eq!(
+                s.parse::<LinearProbability>()
+                    .unwrap()
+                    .to_string()
+                    .parse::<f64>()
+                    .unwrap(),
+                s.parse::<f64>().unwrap()
+            );
+        }
+        assert_eq!("37".parse::<PhredProbability>().unwrap().to_string(), "37");
     }
 
     #[test]
@@ -889,6 +930,34 @@ mod tests {
             PhredProbability::from(LinearProbability::new_unchecked(2.0)),
             0
         );
+        assert_eq!(
+            PhredProbability::from(LinearProbability::new_unchecked(f64::NAN)),
+            0
+        );
+        assert_eq!(
+            HpPhredProbability::from(LinearProbability::new_unchecked(2.0)),
+            0
+        );
+        assert_eq!(
+            HpPhredProbability::from(LogProbability::new_unchecked(f64::NAN)),
+            0
+        );
+    }
+
+    /// Divergence: C++ wrapped around (`PhredInt(200) + PhredInt(100)` gave 44).
+    #[test]
+    fn adding_phred_probabilities_saturates_at_the_lowest_probability() {
+        assert_eq!(phred(200) + phred(100), PhredProbability::lowest());
+        let mut ph = phred(255);
+        ph += phred(1);
+        assert_eq!(ph, PhredProbability::lowest());
+
+        let hp = hp_phred(65000) + hp_phred(1000);
+        assert_eq!(hp, HpPhredProbability::lowest());
+        assert!(!hp.is_tag());
+        let mut hp = hp_phred(65534);
+        hp += hp_phred(1);
+        assert!(!hp.is_tag());
     }
 
     #[test]
@@ -913,6 +982,21 @@ mod tests {
         assert!(l.is_tag());
         assert_eq!(l.byte_tag(), Some(7));
         assert_eq!(log10(-1.0).byte_tag(), None);
+    }
+
+    /// Divergence: C++ took a signed `char`, so bytes 128..=255 encoded to non-tag values.
+    #[test]
+    fn byte_tags_above_127_round_trip() {
+        for byte in [128, 200, 255] {
+            let mut p = LinearProbability::default();
+            p.set_as_byte_tag(byte);
+            assert!(p.is_tag());
+            assert_eq!(p.byte_tag(), Some(byte));
+            let mut l = LogProbability::default();
+            l.set_as_byte_tag(byte);
+            assert!(l.is_tag());
+            assert_eq!(l.byte_tag(), Some(byte));
+        }
     }
 
     /// Divergence: C++ floored (integer division by 100).
@@ -954,7 +1038,7 @@ mod tests {
             Log10Probability::average([log10(-1.0), log10(-2.0)])
                 .unwrap()
                 .get(),
-            0.055f64.log10(),
+            -1.2596373105057561, // log10(0.055)
         );
         assert_eq!(
             PhredProbability::average([phred(10), phred(20)]).unwrap(),
@@ -970,7 +1054,7 @@ mod tests {
 
     #[test]
     fn average_of_log_probabilities_does_not_underflow() {
-        let expected = -1000.0 + ((1.0 + (-1.0f64).exp()) / 2.0).ln();
+        let expected = -1000.3798854930417; // -1000 + ln((1 + e^-1) / 2)
         assert_close(
             LogProbability::average([log(-1000.0), log(-1001.0)])
                 .unwrap()
