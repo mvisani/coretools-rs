@@ -7,4 +7,10 @@ publish = false
 
 [dependencies]
 num-traits = "0.2.19"
+rand = "0.10.3"
+statrs = "0.19.1"
 thiserror = "2.0.21"
+
+[dev-dependencies]
+rand_chacha = "0.10.0"
+rand_distr = "0.6.0"

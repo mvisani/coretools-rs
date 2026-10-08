@@ -3,6 +3,7 @@
 pub mod bounded;
 mod number;
 pub mod probability;
+pub mod special;
 
 pub use number::ParseNumberError;
 
