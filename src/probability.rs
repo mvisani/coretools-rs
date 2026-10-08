@@ -1,5 +1,4 @@
 use core::cmp::Ordering;
-use core::error::Error;
 use core::f64::consts::{LN_10, LOG10_E};
 use core::fmt;
 use core::marker::PhantomData;
@@ -9,11 +8,13 @@ use core::str::FromStr;
 use num_traits::{NumAssign, One, Zero};
 use thiserror::Error;
 
+use crate::ParseNumberError;
+
 // ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ProbabilityError {
     #[error("{value} is outside of the {kind} probability range")]
     OutOfRange { kind: &'static str, value: String },
@@ -23,7 +24,7 @@ pub enum ProbabilityError {
         kind: &'static str,
         input: String,
         #[source]
-        source: Box<dyn Error + Send + Sync + 'static>,
+        source: ParseNumberError,
     },
 }
 
@@ -36,7 +37,7 @@ pub trait ProbabilityKind: Copy + PartialEq + PartialOrd + fmt::Debug + 'static 
         + num_traits::NumCast
         + fmt::Debug
         + fmt::Display
-        + FromStr<Err: Error + Send + Sync + 'static>;
+        + FromStr<Err: Into<ParseNumberError>>;
 
     const NAME: &'static str;
     const MIN: Self::Value;
@@ -546,7 +547,7 @@ impl<K: ProbabilityKind> FromStr for Probability<K> {
             .map_err(|e| ProbabilityError::Parse {
                 kind: K::NAME,
                 input: s.to_owned(),
-                source: Box::new(e),
+                source: e.into(),
             })?;
         Self::new(value)
     }
@@ -896,8 +897,13 @@ mod tests {
         let err = "2".parse::<LinearProbability>().unwrap_err();
         assert!(matches!(err, ProbabilityError::OutOfRange { .. }));
         let err = "abc".parse::<PhredProbability>().unwrap_err();
-        assert!(matches!(err, ProbabilityError::Parse { .. }));
-        assert!(err.source().is_some());
+        assert!(matches!(
+            err,
+            ProbabilityError::Parse {
+                source: ParseNumberError::Int(_),
+                ..
+            }
+        ));
         for s in ["0.25", "1e-300", "0"] {
             assert_eq!(
                 s.parse::<LinearProbability>()

@@ -227,7 +227,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bounded::{ParseNumberError, ZeroOneClosed};
+    use crate::ParseNumberError;
+    use crate::bounded::ZeroOneClosed;
     use core::ops::Bound::{Excluded, Included, Unbounded};
 
     fn zero_one(v: f64) -> ZeroOneClosed {

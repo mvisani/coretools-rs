@@ -40,19 +40,11 @@ use core::str::FromStr;
 use num_traits::ToPrimitive;
 use thiserror::Error;
 
+use crate::ParseNumberError;
+
 // ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
-
-/// Why a string is not a number of the expected type.
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub enum ParseNumberError {
-    #[error(transparent)]
-    Float(#[from] ParseFloatError),
-
-    #[error(transparent)]
-    Int(#[from] ParseIntError),
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum BoundedError {
