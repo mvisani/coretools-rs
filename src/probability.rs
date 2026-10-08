@@ -557,16 +557,7 @@ impl<K: ProbabilityKind> FromStr for Probability<K> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Relative tolerance of the port (issue #1: ~1e-9); exact when `expected` is 0.
-    #[track_caller]
-    fn assert_close(actual: f64, expected: f64) {
-        let tol = 1e-9 * expected.abs();
-        assert!(
-            (actual - expected).abs() <= tol,
-            "{actual} is not within {tol} of {expected}"
-        );
-    }
+    use crate::test_util::assert_close;
 
     fn lin(p: f64) -> LinearProbability {
         LinearProbability::new(p).unwrap()

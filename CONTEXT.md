@@ -29,8 +29,15 @@ A sentinel value stored in a probability slot in place of a probability; some re
 ### Values
 
 **Bounded value**:
-A number guaranteed to lie within a fixed interval (e.g. positive, strictly positive, open unit interval).
+A number guaranteed to lie within a fixed Interval (e.g. positive, strictly positive, open unit interval).
 _Avoid_: weak type, strong type
+
+**Interval**:
+The set of values a Bounded value may take, fixed by its type (Unbounded, Positive, StrictlyPositive, Negative, StrictlyNegative, ZeroOneClosed, ZeroOneOpen, ZeroOpenOneClosed).
+
+**Numeric range**:
+A range of numbers given at run time, each end included or excluded, written `[a,b)`, `]a,b[`, `a,b`, with `-inf` / `inf` or an empty bound for an open-ended side.
+_Avoid_: interval (reserved for Bounded values)
 
 ### Positions
 
