@@ -4,6 +4,7 @@ pub mod bounded;
 mod number;
 pub mod probability;
 pub mod special;
+pub mod stats;
 
 pub use number::ParseNumberError;
 

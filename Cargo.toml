@@ -6,6 +6,7 @@ license = "MPL-2.0"
 publish = false
 
 [dependencies]
+ndarray = "0.17.2"
 num-traits = "0.2.19"
 rand = "0.10.3"
 statrs = "0.19.1"
